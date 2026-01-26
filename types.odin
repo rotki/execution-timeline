@@ -39,3 +39,9 @@ Async_Request :: struct {
 	start : i64,
 	args  : string,
 }
+
+Task_Manager_Pending :: struct {
+	name  : string,
+	actor : string,
+	start : i64,
+}

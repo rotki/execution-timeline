@@ -1,0 +1,46 @@
+name: build-on-tag
+
+on:
+  push:
+    tags:
+      - "*"
+
+jobs:
+  build-linux-amd64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libx11-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libgl1-mesa-dev \
+            libasound2-dev \
+            unzip
+
+      - name: Install Odin
+        env:
+          ODIN_VERSION: dev-2026-01
+        run: |
+          curl -fL -o odin.tar.gz "https://github.com/odin-lang/Odin/releases/download/${ODIN_VERSION}/odin-linux-amd64-${ODIN_VERSION}.tar.gz"
+          mkdir -p odin
+          tar -xzf odin.tar.gz -C odin
+          echo "$(pwd)/odin" >> "$GITHUB_PATH"
+
+      - name: Build linux amd64
+        run: |
+          mkdir -p dist
+          odin build . -out:dist/rotki-log-timeline
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rotki-log-timeline-linux-amd64
+          path: dist/rotki-log-timeline

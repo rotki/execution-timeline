@@ -15,6 +15,7 @@ parse_log_file :: proc(path: string) -> (tasks: [dynamic]Event, requests: [dynam
 	task_stacks := make(map[string]Task_Stack)
 	req_stacks := make(map[string]Req_Stack)
 	async_pending := make(map[int]Async_Request)
+	task_manager_pending := make(map[string]Task_Manager_Pending)
 
 	first_set := false
 	min_ts: i64
@@ -77,11 +78,20 @@ parse_log_file :: proc(path: string) -> (tasks: [dynamic]Event, requests: [dynam
 		}
 
 		if strings.starts_with(msg, "Spawning task manager task") {
-			name := strings.trim_space(msg[len("Spawning task manager task"):])
+			name := normalize_task_manager_name(strings.trim_space(msg[len("Spawning task manager task"):]))
 			if len(name) == 0 {
-				name = "Spawning task manager task"
+				name = "task manager task"
 			}
-			append(&tasks, Event{kind = .Task, name = name, actor = actor, start = ts, end = ts + 5})
+			task_manager_pending[name] = Task_Manager_Pending{name = name, actor = actor, start = ts}
+			continue
+		}
+
+		if strings.starts_with(msg, "Finished task ") && strings.contains(msg, " from task manager.") {
+			name := normalize_task_manager_name(parse_task_manager_finish_name(msg))
+			if pending, ok := task_manager_pending[name]; ok {
+				append(&tasks, Event{kind = .Task, name = pending.name, actor = pending.actor, start = pending.start, end = ts})
+				delete_key(&task_manager_pending, name)
+			}
 			continue
 		}
 		if strings.starts_with(msg, "Exit ") {
@@ -170,6 +180,9 @@ parse_log_file :: proc(path: string) -> (tasks: [dynamic]Event, requests: [dynam
 			append(&tasks, Event{kind = .Task, name = item.name, actor = "(open)", start = item.start, end = max_ts})
 		}
 	}
+	for _, pending in task_manager_pending {
+		append(&tasks, Event{kind = .Task, name = pending.name, actor = "(open)", start = pending.start, end = max_ts})
+	}
 	for _, stack in req_stacks {
 		for i := 0; i < stack.len; i += 1 {
 			item := stack.items[i]
@@ -252,6 +265,35 @@ parse_task_id_from_path :: proc(msg: string) -> (id: int, ok: bool) {
 	}
 	start := path_idx + len("/api/1/tasks/")
 	return parse_int_at(msg, start)
+}
+
+parse_task_manager_finish_name :: proc(msg: string) -> string {
+	prefix := "Finished task "
+	suffix := " from task manager."
+	start := strings.index(msg, prefix)
+	if start == -1 {
+		return ""
+	}
+	start += len(prefix)
+	end := strings.index(msg[start:], suffix)
+	if end != -1 {
+		end += start
+	}
+	if end == -1 || end <= start {
+		return ""
+	}
+	return strings.trim_space(msg[start:end])
+}
+
+normalize_task_manager_name :: proc(name: string) -> string {
+	clean := strings.trim_space(name)
+	if len(clean) >= 2 {
+		if (clean[0] == '\"' && clean[len(clean)-1] == '\"') ||
+			(clean[0] == '\'' && clean[len(clean)-1] == '\'') {
+			clean = clean[1:len(clean)-1]
+		}
+	}
+	return strings.trim_space(clean)
 }
 
 parse_int_at :: proc(s: string, start: int) -> (id: int, ok: bool) {
