@@ -110,11 +110,12 @@ parse_log_file :: proc(path: string) -> (tasks: [dynamic]Event, requests: [dynam
 
 		if strings.starts_with(msg, "start rotki api ") {
 			name := parse_request_name(msg[len("start rotki api "):])
+			args := extract_request_args(msg)
 			stack := req_stacks[actor]
 			if stack.len == len(stack.items) {
-				append(&stack.items, Req_Stack_Item{name = name, start = ts})
+				append(&stack.items, Req_Stack_Item{name = name, start = ts, args = args})
 			} else {
-				stack.items[stack.len] = Req_Stack_Item{name = name, start = ts}
+				stack.items[stack.len] = Req_Stack_Item{name = name, start = ts, args = args}
 			}
 			stack.len += 1
 			req_stacks[actor] = stack
@@ -129,7 +130,7 @@ parse_log_file :: proc(path: string) -> (tasks: [dynamic]Event, requests: [dynam
 			}
 			if task_id, ok := parse_task_id_from_path(msg); ok {
 				if async, exists := async_pending[task_id]; exists {
-					append(&requests, Event{kind = .Request, name = async.name, actor = async.actor, start = async.start, end = ts})
+					append(&requests, Event{kind = .Request, name = async.name, actor = async.actor, start = async.start, end = ts, args = async.args})
 					delete_key(&async_pending, task_id)
 				}
 			}
@@ -142,13 +143,14 @@ parse_log_file :: proc(path: string) -> (tasks: [dynamic]Event, requests: [dynam
 				idx := stack.len - 1
 				start := stack.items[idx].start
 				req_name := stack.items[idx].name
+				req_args := stack.items[idx].args
 				if len(name) > 0 {
 					req_name = name
 				}
 				if task_id, ok := parse_task_id(msg); ok {
-					async_pending[task_id] = Async_Request{name = req_name, actor = actor, start = start}
+					async_pending[task_id] = Async_Request{name = req_name, actor = actor, start = start, args = req_args}
 				} else {
-					append(&requests, Event{kind = .Request, name = req_name, actor = actor, start = start, end = ts})
+					append(&requests, Event{kind = .Request, name = req_name, actor = actor, start = start, end = ts, args = req_args})
 				}
 				stack.len -= 1
 				req_stacks[actor] = stack
@@ -171,11 +173,11 @@ parse_log_file :: proc(path: string) -> (tasks: [dynamic]Event, requests: [dynam
 	for _, stack in req_stacks {
 		for i := 0; i < stack.len; i += 1 {
 			item := stack.items[i]
-			append(&requests, Event{kind = .Request, name = item.name, actor = "(open)", start = item.start, end = max_ts})
+			append(&requests, Event{kind = .Request, name = item.name, actor = "(open)", start = item.start, end = max_ts, args = item.args})
 		}
 	}
 	for _, async in async_pending {
-		append(&requests, Event{kind = .Request, name = async.name, actor = "(open)", start = async.start, end = max_ts})
+		append(&requests, Event{kind = .Request, name = async.name, actor = "(open)", start = async.start, end = max_ts, args = async.args})
 	}
 
 	return tasks, requests, true, min_ts, max_ts
@@ -208,6 +210,21 @@ parse_request_name :: proc(rest: string) -> string {
 		return tokens[0]
 	}
 	return "request"
+}
+
+extract_request_args :: proc(msg: string) -> string {
+	// Keep the most useful payload fields for hover details.
+	idx := strings.index(msg, "view_args=")
+	if idx == -1 {
+		idx = strings.index(msg, "query_string=")
+	}
+	if idx == -1 {
+		idx = strings.index(msg, "json_data=")
+	}
+	if idx == -1 {
+		return ""
+	}
+	return strings.trim_space(msg[idx:])
 }
 
 parse_task_id :: proc(msg: string) -> (id: int, ok: bool) {

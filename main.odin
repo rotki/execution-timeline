@@ -42,6 +42,10 @@ main :: proc() {
 
 	dragging := false
 	last_mouse_x := i32(0)
+	mouse_down := false
+	mouse_down_pos := rl.Vector2{}
+	selected := false
+	selected_ev := Event{}
 
 	for !rl.WindowShouldClose() {
 		screen_w := rl.GetScreenWidth()
@@ -50,9 +54,12 @@ main :: proc() {
 		if rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
 			dragging = true
 			last_mouse_x = rl.GetMouseX()
+			mouse_down = true
+			mouse_down_pos = rl.GetMousePosition()
 		}
 		if rl.IsMouseButtonReleased(rl.MouseButton.LEFT) {
 			dragging = false
+			mouse_down = false
 		}
 		if dragging {
 			dx := rl.GetMouseX() - last_mouse_x
@@ -88,12 +95,39 @@ main :: proc() {
 		draw_region(ui_font, "Background tasks", task_rect)
 		draw_region(ui_font, "Requests", req_rect)
 
-		draw_timeline(ui_font, task_rect, tasks[:], task_lanes, view_start, view_end, rl.Color{76, 141, 247, 255})
-		draw_timeline(ui_font, req_rect, requests[:], request_lanes, view_start, view_end, rl.Color{85, 171, 115, 255})
+		task_hover, task_ev := draw_timeline(ui_font, task_rect, tasks[:], task_lanes, view_start, view_end, rl.Color{76, 141, 247, 255})
+		req_hover, req_ev := draw_timeline(ui_font, req_rect, requests[:], request_lanes, view_start, view_end, rl.Color{85, 171, 115, 255})
 
 		draw_time_axis(ui_font, task_rect, view_start, view_end)
 
 		draw_text(ui_font, "Left-drag to pan, mouse wheel to zoom", 24, screen_h-24, 12, rl.Color{110, 110, 110, 255})
+
+		if selected {
+			if draw_details_panel(ui_font, selected_ev, screen_w, screen_h) {
+				selected = false
+			}
+		} else {
+			hovered := false
+			hover_ev := Event{}
+			if task_hover {
+				hovered = true
+				hover_ev = task_ev
+			} else if req_hover {
+				hovered = true
+				hover_ev = req_ev
+			}
+
+			if hovered {
+				draw_tooltip(ui_font, hover_ev, rl.GetMousePosition())
+			}
+
+			if rl.IsMouseButtonReleased(rl.MouseButton.LEFT) {
+				if hovered && !is_drag(mouse_down_pos, rl.GetMousePosition()) {
+					selected = true
+					selected_ev = hover_ev
+				}
+			}
+		}
 
 		rl.EndDrawing()
 	}
@@ -108,9 +142,9 @@ draw_region :: proc(font: rl.Font, title: string, rect: rl.Rectangle) {
 	draw_text(font, title, i32(rect.x)+8, text_y, 16, rl.Color{50, 50, 50, 255})
 }
 
-draw_timeline :: proc(font: rl.Font, rect: rl.Rectangle, events: []Event, lanes: int, view_start, view_end: i64, color: rl.Color) {
+draw_timeline :: proc(font: rl.Font, rect: rl.Rectangle, events: []Event, lanes: int, view_start, view_end: i64, color: rl.Color) -> (hovered: bool, hover_ev: Event) {
 	if len(events) == 0 {
-		return
+		return false, Event{}
 	}
 	lane_count := max_int(1, lanes)
 	lane_h := (rect.height - 28) / f32(lane_count)
@@ -120,9 +154,10 @@ draw_timeline :: proc(font: rl.Font, rect: rl.Rectangle, events: []Event, lanes:
 
 	mouse := rl.GetMousePosition()
 
-	hovered := false
-	hover_ev := Event{}
+	hovered = false
+	hover_ev = Event{}
 
+	rl.BeginScissorMode(i32(rect.x), i32(rect.y), i32(rect.width), i32(rect.height))
 	for ev in events {
 		x1 := time_to_x(ev.start, view_start, view_end, rect)
 		x2 := time_to_x(ev.end, view_start, view_end, rect)
@@ -149,10 +184,9 @@ draw_timeline :: proc(font: rl.Font, rect: rl.Rectangle, events: []Event, lanes:
 			hover_ev = ev
 		}
 	}
+	rl.EndScissorMode()
 
-	if hovered {
-		draw_tooltip(font, hover_ev, mouse)
-	}
+	return hovered, hover_ev
 }
 
 draw_time_axis :: proc(font: rl.Font, rect: rl.Rectangle, view_start, view_end: i64) {
@@ -187,21 +221,52 @@ draw_label_in_rect :: proc(font: rl.Font, text: string, rect: rl.Rectangle, font
 }
 
 draw_tooltip :: proc(font: rl.Font, ev: Event, pos: rl.Vector2) {
+	max_w := f32(420)
+
 	label := fmt.tprintf("%s (%s)", ev.name, ev.actor)
 	dur := fmt.tprintf("%s - %s", format_hms(ev.start), format_hms(ev.end))
 	elapsed := format_duration(ev.end - ev.start)
 	elapsed_line := fmt.tprintf("Duration: %s", elapsed)
+	args_line := ""
+	if len(ev.args) > 0 {
+		args_line = fmt.tprintf("Args: %s", ev.args)
+	}
+
+	label = truncate_to_width(font, label, 12, max_w)
+	dur = truncate_to_width(font, dur, 12, max_w)
+	elapsed_line = truncate_to_width(font, elapsed_line, 12, max_w)
+	if len(args_line) > 0 {
+		args_line = truncate_to_width(font, args_line, 12, max_w)
+	}
+
 	w := max_f32(
 		measure_text_width(font, label, 12),
 		max_f32(measure_text_width(font, dur, 12), measure_text_width(font, elapsed_line, 12)),
-	) + 12
-	h := f32(48)
+	)
+	if len(args_line) > 0 {
+		w = max_f32(w, measure_text_width(font, args_line, 12))
+	}
+	w += 12
+
+	line_count := 3
+	if len(args_line) > 0 {
+		line_count = 4
+	}
+	line_h := f32(14)
+	h := f32(8) + line_h*f32(line_count)
 	rec := rl.Rectangle{pos.x + 12, pos.y + 12, f32(w), f32(h)}
+	screen_w := rl.GetScreenWidth()
+	if rec.x+rec.width > f32(screen_w)-6 {
+		rec.x = f32(screen_w) - rec.width - 6
+	}
 	rl.DrawRectangleRec(rec, rl.Color{255, 255, 255, 245})
 	rl.DrawRectangleLinesEx(rec, 1, rl.Color{50, 50, 50, 180})
 	draw_text(font, label, i32(rec.x)+6, i32(rec.y)+4, 12, rl.Color{30, 30, 30, 255})
 	draw_text(font, dur, i32(rec.x)+6, i32(rec.y)+18, 12, rl.Color{80, 80, 80, 255})
 	draw_text(font, elapsed_line, i32(rec.x)+6, i32(rec.y)+32, 12, rl.Color{80, 80, 80, 255})
+	if len(args_line) > 0 {
+		draw_text(font, args_line, i32(rec.x)+6, i32(rec.y)+46, 12, rl.Color{80, 80, 80, 255})
+	}
 }
 
 // --- Math helpers ---
@@ -270,6 +335,26 @@ measure_text_width :: proc(font: rl.Font, text: string, size: i32) -> f32 {
 	return rl.MeasureTextEx(font, to_cstring(text), f32(size), 0).x
 }
 
+truncate_to_width :: proc(font: rl.Font, text: string, size: i32, max_w: f32) -> string {
+	if measure_text_width(font, text, size) <= max_w {
+		return text
+	}
+	ellipsis := "..."
+	cut := text
+	ell := ellipsis
+	for len(cut) > 3 {
+		measure := fmt.tprintf("%s%s", cut, ell)
+		if measure_text_width(font, measure, size) <= max_w {
+			break
+		}
+		cut = cut[:len(cut)-1]
+	}
+	if len(cut) <= 3 {
+		return ellipsis
+	}
+	return fmt.tprintf("%s%s", cut, ellipsis)
+}
+
 format_duration :: proc(seconds: i64) -> string {
 	secs := seconds
 	if secs < 0 {
@@ -288,4 +373,89 @@ format_duration :: proc(seconds: i64) -> string {
 		return "<1s"
 	}
 	return fmt.tprintf("%ds", s)
+}
+
+draw_details_panel :: proc(font: rl.Font, ev: Event, screen_w, screen_h: i32) -> bool {
+	panel_w := f32(420)
+	panel_x := f32(screen_w) - panel_w - 24
+	panel_y := f32(24)
+
+	lines := make([dynamic]string, 0, 6)
+	append(&lines, fmt.tprintf("Name: %s", ev.name))
+	append(&lines, fmt.tprintf("Actor: %s", ev.actor))
+	append(&lines, fmt.tprintf("Start: %s", format_hms(ev.start)))
+	append(&lines, fmt.tprintf("End: %s", format_hms(ev.end)))
+	append(&lines, fmt.tprintf("Duration: %s", format_duration(ev.end - ev.start)))
+	if len(ev.args) > 0 {
+		append(&lines, fmt.tprintf("Args: %s", ev.args))
+	}
+
+	line_h := f32(16)
+	panel_h := f32(48) + line_h*f32(len(lines))
+	if panel_h < 120 {
+		panel_h = 120
+	}
+	panel := rl.Rectangle{panel_x, panel_y, panel_w, panel_h}
+
+	rl.DrawRectangleRec(panel, rl.Color{255, 255, 255, 245})
+	rl.DrawRectangleLinesEx(panel, 1, rl.Color{80, 80, 80, 120})
+
+	draw_text(font, "Details", i32(panel.x)+12, i32(panel.y)+10, 16, rl.Color{30, 30, 30, 255})
+
+	close_rect := rl.Rectangle{panel.x + panel.width - 24, panel.y + 8, 16, 16}
+	draw_text(font, "X", i32(close_rect.x)+1, i32(close_rect.y)-1, 16, rl.Color{60, 60, 60, 255})
+
+	max_line_w := panel.width - 24
+	for i := 0; i < len(lines); i += 1 {
+		text := truncate_to_width(font, lines[i], 12, max_line_w)
+		draw_text(font, text, i32(panel.x)+12, i32(panel.y)+36+i32(line_h*f32(i)), 12, rl.Color{60, 60, 60, 255})
+	}
+
+	copy_rect := rl.Rectangle{panel.x + 12, panel.y + panel.height - 32, 72, 22}
+	rl.DrawRectangleRec(copy_rect, rl.Color{240, 240, 240, 255})
+	rl.DrawRectangleLinesEx(copy_rect, 1, rl.Color{120, 120, 120, 180})
+	draw_text(font, "Copy", i32(copy_rect.x)+14, i32(copy_rect.y)+3, 12, rl.Color{40, 40, 40, 255})
+
+	if rl.IsMouseButtonReleased(rl.MouseButton.LEFT) {
+		mouse := rl.GetMousePosition()
+		if rl.CheckCollisionPointRec(mouse, close_rect) {
+			return true
+		}
+		if rl.CheckCollisionPointRec(mouse, copy_rect) {
+			details := format_event_details(ev)
+			rl.SetClipboardText(to_cstring(details))
+		}
+	}
+
+	return false
+}
+
+is_drag :: proc(a, b: rl.Vector2) -> bool {
+	dx := a.x - b.x
+	dy := a.y - b.y
+	return (dx*dx + dy*dy) > 25
+}
+
+format_event_details :: proc(ev: Event) -> string {
+	lines := make([dynamic]string, 0, 4)
+	append(&lines, fmt.tprintf("Name: %s", ev.name))
+	append(&lines, fmt.tprintf("Actor: %s", ev.actor))
+	append(&lines, fmt.tprintf("Start: %s", format_hms(ev.start)))
+	append(&lines, fmt.tprintf("End: %s", format_hms(ev.end)))
+	append(&lines, fmt.tprintf("Duration: %s", format_duration(ev.end - ev.start)))
+	if len(ev.args) > 0 {
+		append(&lines, fmt.tprintf("Args: %s", ev.args))
+	}
+	return join_lines(lines)
+}
+
+join_lines :: proc(lines: [dynamic]string) -> string {
+	if len(lines) == 0 {
+		return ""
+	}
+	out := lines[0]
+	for i := 1; i < len(lines); i += 1 {
+		out = fmt.tprintf("%s\n%s", out, lines[i])
+	}
+	return out
 }

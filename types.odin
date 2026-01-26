@@ -9,6 +9,7 @@ Event :: struct {
 	start : i64,
 	end   : i64,
 	lane  : int,
+	args  : string,
 }
 
 Task_Stack_Item :: struct {
@@ -19,6 +20,7 @@ Task_Stack_Item :: struct {
 Req_Stack_Item :: struct {
 	name  : string,
 	start : i64,
+	args  : string,
 }
 
 Task_Stack :: struct {
@@ -35,4 +37,5 @@ Async_Request :: struct {
 	name  : string,
 	actor : string,
 	start : i64,
+	args  : string,
 }
