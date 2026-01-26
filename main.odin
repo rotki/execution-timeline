@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:c"
 import "core:math"
 import "core:os"
 import "core:strings"
@@ -34,7 +35,15 @@ main :: proc() {
 	rl.InitWindow(1280, 720, to_cstring("rotki timeline"))
 	rl.SetTargetFPS(60)
 
-	ui_font := rl.LoadFont(to_cstring("SpaceMono-Regular.ttf"))
+	font_bytes := #load("fonts/SpaceMono-Regular.ttf")
+	ui_font := rl.LoadFontFromMemory(
+		to_cstring(".ttf"),
+		rawptr(&font_bytes[0]),
+		c.int(len(font_bytes)),
+		16,
+		nil,
+		0,
+	)
 	rl.SetTextureFilter(ui_font.texture, rl.TextureFilter.BILINEAR)
 
 	defer rl.UnloadFont(ui_font)
