@@ -31,7 +31,7 @@ jobs:
         run: |
           curl -fL -o odin.tar.gz "https://github.com/odin-lang/Odin/releases/download/${ODIN_VERSION}/odin-linux-amd64-${ODIN_VERSION}.tar.gz"
           mkdir -p odin
-          tar -xzf odin.tar.gz -C odin
+          tar -xzf odin.tar.gz -C odin --strip-components=1
           echo "$(pwd)/odin" >> "$GITHUB_PATH"
 
       - name: Build linux amd64
