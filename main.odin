@@ -11,6 +11,14 @@ import rl "vendor:raylib"
 font_bytes := #load("fonts/SpaceMono-Regular.ttf")
 last_copy_click: f64 = -10.0
 
+search_active := false
+search_query := ""
+search_results: [dynamic]int
+search_index := 0
+prev_search_index := -1
+help_active := false
+should_close := false
+
 main :: proc() {
 	log_path := "20260125_140736_rotkehlchen.log"
 	if len(os.args) > 1 {
@@ -58,9 +66,95 @@ main :: proc() {
 	selected := false
 	selected_ev := Event{}
 
-	for !rl.WindowShouldClose() {
+	for !should_close {
+		// Check for window close (no ESC close)
+		if rl.WindowShouldClose() && !rl.IsKeyPressed(.ESCAPE) {
+			should_close = true
+			break
+		}
+
 		screen_w := rl.GetScreenWidth()
 		screen_h := rl.GetScreenHeight()
+
+		// Handle search toggle (Ctrl+F or Cmd+F on macOS)
+		if !search_active && (rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.LEFT_SUPER)) && rl.IsKeyPressed(.F) {
+			search_active = true
+		}
+
+		// Handle help toggle (Ctrl+H or Cmd+H on macOS)
+		if (rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.LEFT_SUPER)) && rl.IsKeyPressed(.H) {
+			help_active = !help_active
+		}
+
+		// Handle search input
+		if search_active {
+			if rl.IsKeyPressed(.ESCAPE) {
+				search_active = false
+				search_query = ""
+				clear(&search_results)
+				search_index = 0
+				prev_search_index = -1
+			} else {
+				for {
+					key := rl.GetCharPressed()
+					if key == 0 do break
+					search_query = fmt.tprintf("%s%c", search_query, rune(key))
+				}
+				if rl.IsKeyDown(.BACKSPACE) && len(search_query) > 0 {
+					search_query = search_query[:len(search_query)-1]
+				}
+				if len(search_results) > 0 {
+					if rl.IsKeyPressed(.ENTER) || rl.IsKeyPressed(.DOWN) {
+						search_index = (search_index + 1) % len(search_results)
+					}
+					if rl.IsKeyPressed(.UP) {
+						search_index = (search_index - 1 + len(search_results)) % len(search_results)
+					}
+				}
+			}
+
+			// Update search results
+			clear(&search_results)
+			if len(search_query) > 0 {
+				query_lower := strings.to_lower(search_query)
+				for i := 0; i < len(tasks); i += 1 {
+					if strings.contains(strings.to_lower(tasks[i].name), query_lower) ||
+						strings.contains(strings.to_lower(tasks[i].args), query_lower) {
+						append(&search_results, i)
+					}
+				}
+				for i := 0; i < len(requests); i += 1 {
+					if strings.contains(strings.to_lower(requests[i].name), query_lower) ||
+						strings.contains(strings.to_lower(requests[i].args), query_lower) {
+						append(&search_results, i + 1000)
+					}
+				}
+			}
+			if search_index >= len(search_results) {
+				search_index = 0
+			}
+
+			// Auto-select first or current result
+			if len(search_results) > 0 {
+				result_idx := search_results[search_index]
+				if result_idx < 1000 {
+					selected = true
+					selected_ev = tasks[result_idx]
+				} else {
+					selected = true
+					selected_ev = requests[result_idx - 1000]
+				}
+				
+				// Center view on the selected event only when index changes
+				if search_index != prev_search_index {
+					event_span := selected_ev.end - selected_ev.start
+					padding := i64(math.max(f64(event_span)*0.5, 100.0))
+					view_start = selected_ev.start - padding
+					view_end = selected_ev.end + padding
+					prev_search_index = search_index
+				}
+			}
+		}
 
 		if rl.IsMouseButtonPressed(rl.MouseButton.LEFT) {
 			dragging = true
@@ -106,37 +200,60 @@ main :: proc() {
 		draw_region(ui_font, "Background tasks", task_rect)
 		draw_region(ui_font, "Requests", req_rect)
 
-		task_hover, task_ev := draw_timeline(ui_font, task_rect, tasks[:], task_lanes, view_start, view_end, rl.Color{76, 141, 247, 255})
-		req_hover, req_ev := draw_timeline(ui_font, req_rect, requests[:], request_lanes, view_start, view_end, rl.Color{85, 171, 115, 255})
+		task_hover, task_ev := draw_timeline(ui_font, task_rect, tasks[:], task_lanes, view_start, view_end, rl.Color{76, 141, 247, 255}, selected_ev, search_active)
+		req_hover, req_ev := draw_timeline(ui_font, req_rect, requests[:], request_lanes, view_start, view_end, rl.Color{85, 171, 115, 255}, selected_ev, search_active)
 
 		draw_time_axis(ui_font, task_rect, view_start, view_end)
 
-		draw_text(ui_font, "Left-drag to pan, mouse wheel to zoom", 24, screen_h-24, 12, rl.Color{110, 110, 110, 255})
+		draw_text(ui_font, "Drag: pan | Wheel: zoom | Ctrl+F: search | Up/Down: navigate results", 24, screen_h-24, 12, rl.Color{110, 110, 110, 255})
+
+		if search_active {
+			draw_search_bar(ui_font, screen_w, screen_h)
+		}
+
+		// Draw help button
+		help_btn := rl.Rectangle{f32(screen_w) - 40, 16, 24, 24}
+		rl.DrawRectangleRec(help_btn, rl.Color{76, 141, 247, 255})
+		rl.DrawRectangleLinesEx(help_btn, 1, rl.Color{40, 40, 40, 200})
+		draw_text(ui_font, "?", i32(help_btn.x)+6, i32(help_btn.y)+2, 14, rl.Color{255, 255, 255, 255})
+
+		if rl.IsMouseButtonReleased(rl.MouseButton.LEFT) {
+			mouse := rl.GetMousePosition()
+			if rl.CheckCollisionPointRec(mouse, help_btn) {
+				help_active = !help_active
+			}
+		}
+
+		if help_active {
+			if draw_help_panel(ui_font, screen_w, screen_h) {
+				help_active = false
+			}
+		}
+
+		hovered := false
+		hover_ev := Event{}
+		if task_hover {
+			hovered = true
+			hover_ev = task_ev
+		} else if req_hover {
+			hovered = true
+			hover_ev = req_ev
+		}
+
+		if hovered && !selected {
+			draw_tooltip(ui_font, hover_ev, rl.GetMousePosition())
+		}
+
+		if rl.IsMouseButtonReleased(rl.MouseButton.LEFT) {
+			if hovered && !is_drag(mouse_down_pos, rl.GetMousePosition()) {
+				selected = true
+				selected_ev = hover_ev
+			}
+		}
 
 		if selected {
 			if draw_details_panel(ui_font, selected_ev, screen_w, screen_h) {
 				selected = false
-			}
-		} else {
-			hovered := false
-			hover_ev := Event{}
-			if task_hover {
-				hovered = true
-				hover_ev = task_ev
-			} else if req_hover {
-				hovered = true
-				hover_ev = req_ev
-			}
-
-			if hovered {
-				draw_tooltip(ui_font, hover_ev, rl.GetMousePosition())
-			}
-
-			if rl.IsMouseButtonReleased(rl.MouseButton.LEFT) {
-				if hovered && !is_drag(mouse_down_pos, rl.GetMousePosition()) {
-					selected = true
-					selected_ev = hover_ev
-				}
 			}
 		}
 
@@ -153,7 +270,7 @@ draw_region :: proc(font: rl.Font, title: string, rect: rl.Rectangle) {
 	draw_text(font, title, i32(rect.x)+8, text_y, 16, rl.Color{50, 50, 50, 255})
 }
 
-draw_timeline :: proc(font: rl.Font, rect: rl.Rectangle, events: []Event, lanes: int, view_start, view_end: i64, color: rl.Color) -> (hovered: bool, hover_ev: Event) {
+draw_timeline :: proc(font: rl.Font, rect: rl.Rectangle, events: []Event, lanes: int, view_start, view_end: i64, color: rl.Color, highlight_ev: Event, should_highlight: bool) -> (hovered: bool, hover_ev: Event) {
 	if len(events) == 0 {
 		return false, Event{}
 	}
@@ -184,7 +301,15 @@ draw_timeline :: proc(font: rl.Font, rect: rl.Rectangle, events: []Event, lanes:
 		h := max_f32(6, lane_h-4)
 		rec := rl.Rectangle{x1, y, x2 - x1, h}
 		rl.DrawRectangleRec(rec, color)
-		rl.DrawRectangleLinesEx(rec, 1, rl.Color{30, 30, 30, 60})
+		
+		// Draw red border if this is the highlighted search result
+		border_color := rl.Color{30, 30, 30, 60}
+		border_width := f32(1)
+		if should_highlight && ev.name == highlight_ev.name && ev.start == highlight_ev.start && ev.end == highlight_ev.end {
+			border_color = rl.Color{255, 0, 0, 255}
+			border_width = 3
+		}
+		rl.DrawRectangleLinesEx(rec, border_width, border_color)
 
 		if rec.width > 40 {
 			draw_label_in_rect(font, ev.name, rec, 12, rl.Color{20, 20, 20, 255})
@@ -484,4 +609,77 @@ join_lines :: proc(lines: [dynamic]string) -> string {
 		out = fmt.tprintf("%s\n%s", out, lines[i])
 	}
 	return out
+}
+
+draw_search_bar :: proc(font: rl.Font, screen_w, screen_h: i32) {
+	bar_w := f32(400)
+	bar_h := f32(40)
+	bar_x := f32(screen_w)/2 - bar_w/2
+	bar_y := f32(24)
+
+	// Draw background
+	rl.DrawRectangleRec(rl.Rectangle{bar_x, bar_y, bar_w, bar_h}, rl.Color{255, 255, 255, 245})
+	rl.DrawRectangleLinesEx(rl.Rectangle{bar_x, bar_y, bar_w, bar_h}, 2, rl.Color{76, 141, 247, 255})
+
+	// Draw search input
+	input_text := fmt.tprintf("Search: %s", search_query)
+	if int(rl.GetTime()*2) % 2 == 0 {
+		input_text = fmt.tprintf("Search: %s|", search_query)
+	}
+	draw_text(font, input_text, i32(bar_x)+12, i32(bar_y)+8, 14, rl.Color{40, 40, 40, 255})
+
+	// Draw result counter
+	if len(search_query) > 0 {
+		result_text := fmt.tprintf("%d results", len(search_results))
+		if len(search_results) > 0 {
+			result_text = fmt.tprintf("%d/%d", search_index+1, len(search_results))
+		}
+		draw_text(font, result_text, i32(bar_x+bar_w-60), i32(bar_y)+8, 12, rl.Color{110, 110, 110, 255})
+	}
+}
+
+draw_help_panel :: proc(font: rl.Font, screen_w, screen_h: i32) -> bool {
+	panel_w := f32(500)
+	panel_h := f32(380)
+	panel_x := f32(screen_w)/2 - panel_w/2
+	panel_y := f32(screen_h)/2 - panel_h/2
+
+	rl.DrawRectangleRec(rl.Rectangle{panel_x, panel_y, panel_w, panel_h}, rl.Color{255, 255, 255, 245})
+	rl.DrawRectangleLinesEx(rl.Rectangle{panel_x, panel_y, panel_w, panel_h}, 2, rl.Color{76, 141, 247, 200})
+
+	// Close button
+	close_rect := rl.Rectangle{panel_x + panel_w - 28, panel_y + 10, 18, 18}
+	draw_text(font, "X", i32(close_rect.x)+2, i32(close_rect.y)-2, 16, rl.Color{76, 141, 247, 255})
+
+	// Title
+	draw_text(font, "Help", i32(panel_x)+20, i32(panel_y)+12, 18, rl.Color{30, 30, 30, 255})
+
+	// Commands
+	commands := []string{
+		"Drag: Pan timeline left/right",
+		"Mouse Wheel: Zoom in/out",
+		"Ctrl+F / Cmd+F: Open search",
+		"Up/Down: Navigate search results",
+		"Backspace (hold): Delete search text",
+		"Escape: Close search dialog",
+		"Click on event: Show details panel",
+		"Copy button: Copy event details",
+		"Ctrl+H / Cmd+H: Toggle this help",
+		"Close window (X): Exit application",
+	}
+
+	line_y := f32(50)
+	for cmd in commands {
+		draw_text(font, cmd, i32(panel_x)+20, i32(panel_y)+i32(line_y), 12, rl.Color{60, 60, 60, 255})
+		line_y += 28
+	}
+
+	if rl.IsMouseButtonReleased(rl.MouseButton.LEFT) {
+		mouse := rl.GetMousePosition()
+		if rl.CheckCollisionPointRec(mouse, close_rect) {
+			return true
+		}
+	}
+
+	return false
 }
