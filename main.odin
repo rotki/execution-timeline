@@ -8,6 +8,9 @@ import "core:strings"
 
 import rl "vendor:raylib"
 
+font_bytes := #load("fonts/SpaceMono-Regular.ttf")
+last_copy_click: f64 = -10.0
+
 main :: proc() {
 	log_path := "20260125_140736_rotkehlchen.log"
 	if len(os.args) > 1 {
@@ -35,7 +38,6 @@ main :: proc() {
 	rl.InitWindow(1280, 720, to_cstring("rotki timeline"))
 	rl.SetTargetFPS(60)
 
-	font_bytes := #load("fonts/SpaceMono-Regular.ttf")
 	ui_font := rl.LoadFontFromMemory(
 		to_cstring(".ttf"),
 		rawptr(&font_bytes[0]),
@@ -421,9 +423,23 @@ draw_details_panel :: proc(font: rl.Font, ev: Event, screen_w, screen_h: i32) ->
 	}
 
 	copy_rect := rl.Rectangle{panel.x + 12, panel.y + panel.height - 32, 72, 22}
-	rl.DrawRectangleRec(copy_rect, rl.Color{240, 240, 240, 255})
+	
+	copy_text := "Copy"
+	button_color := rl.Color{240, 240, 240, 255}
+	text_color := rl.Color{40, 40, 40, 255}
+	if rl.GetTime() - last_copy_click < 1.5 {
+		copy_text = "Copied"
+		button_color = rl.Color{76, 175, 80, 255}
+		text_color = rl.Color{255, 255, 255, 255}
+	}
+	
+	rl.DrawRectangleRec(copy_rect, button_color)
 	rl.DrawRectangleLinesEx(copy_rect, 1, rl.Color{120, 120, 120, 180})
-	draw_text(font, "Copy", i32(copy_rect.x)+14, i32(copy_rect.y)+3, 12, rl.Color{40, 40, 40, 255})
+	
+	text_w := measure_text_width(font, copy_text, 12)
+	text_x := i32(copy_rect.x + (copy_rect.width - text_w) / 2)
+	text_y := i32(copy_rect.y + (copy_rect.height - 12) / 2)
+	draw_text(font, copy_text, text_x, text_y, 12, text_color)
 
 	if rl.IsMouseButtonReleased(rl.MouseButton.LEFT) {
 		mouse := rl.GetMousePosition()
@@ -433,6 +449,7 @@ draw_details_panel :: proc(font: rl.Font, ev: Event, screen_w, screen_h: i32) ->
 		if rl.CheckCollisionPointRec(mouse, copy_rect) {
 			details := format_event_details(ev)
 			rl.SetClipboardText(to_cstring(details))
+			last_copy_click = rl.GetTime()
 		}
 	}
 
