@@ -20,10 +20,29 @@ help_active := false
 should_close := false
 
 main :: proc() {
-	log_path := "20260125_140736_rotkehlchen.log"
-	if len(os.args) > 1 {
-		log_path = os.args[1]
+	if len(os.args) < 2 {
+		fmt.println("Usage: logs_rotki <log_file>")
+		fmt.println()
+		fmt.println("Arguments:")
+		fmt.println("  <log_file>    Path to the Rotki log file to visualize")
+		fmt.println()
+		fmt.println("Options:")
+		fmt.println("  --help        Show this help message")
+		return
 	}
+
+	if os.args[1] == "--help" {
+		fmt.println("Usage: logs_rotki <log_file>")
+		fmt.println()
+		fmt.println("Arguments:")
+		fmt.println("  <log_file>    Path to the Rotki log file to visualize")
+		fmt.println()
+		fmt.println("Options:")
+		fmt.println("  --help        Show this help message")
+		return
+	}
+
+	log_path := os.args[1]
 
 	tasks, requests, ok, min_ts, max_ts := parse_log_file(log_path)
 	if !ok {
